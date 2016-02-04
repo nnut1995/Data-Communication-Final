@@ -1,0 +1,247 @@
+#!/usr/bin/env python
+import asyncore, socket
+import logging
+from cStringIO import StringIO
+import socket as sk
+import os
+import sys
+import getopt
+
+class Download(object):
+	def __init__(self,url,filename):
+		self.url = url
+		self.servName = '' # The Servname that will be slice from url
+		self.objName = '' # The objName that will be slice from url
+		self.cutURL() # Slice URL to servname and objname
+		self.filename = filename # Set the filename
+		self.port = 80 # Set the port
+		self.header = '' # create the String to store the header
+		self.resumeonheader = 0 # the int for checking to write file in header file
+		self.content_length = '' # String to store the content lenght 
+		self.ETag = '' # The string to store ETag of the original file
+		self.done = False # Download checker
+		self.Last_Modified = '' # Store the modified date of the original file
+		if os.path.isfile(self.filename): # Check that the file is exist
+			self.FullResume() # Do resume if the file is exist
+		else:
+			self.FullDownload() # Download file if the file does not exist
+
+	def mkDownloadRequest(self,start=None, stop=None): # Make the request to download the file if start is provide will start download by byte. If have stop it will provide the byte to stop
+		if start is None:
+			return ("GET {o} HTTP/1.1\r\n" + "Host: {s}\r\n"+"Connection: close\r\n\r\n").format(o = self.objName, s = self.servName)
+		elif stop is None:
+			return ("GET {o} HTTP/1.1\r\n"+"Host: {s}\r\n"+"Range: bytes={h}-\r\n"+"Connection: close\r\n\r\n").format(o = self.objName,s = self.servName,h = start)
+		else:
+			return ("GET {o} HTTP/1.1\r\n"+"Host: {s}\r\n"+"Range: bytes={h}-{z}\r\n\r\n").format(o = self.objName,s = self.servName,h = start,z = stop)
+			
+
+
+	def FullResume(self): # Resume function
+		self.resumeonheader = 1 # Change the int to not write header to the header file again
+		self.file_onlocal_size = os.path.getsize(self.filename) # check local file size
+		self.ContentLength() # get content length
+		if os.path.isfile(self.filename+"Header"+'.txt') == False: # Check the header file
+			print "File already download or change filename" 
+			return "File already download"
+		self.connectionWithresume(self.servName,self.objName,self.file_onlocal_size) # make the connection by request by byte
+		self.Get_Header(self.filename) # get header of the file and store in the variable
+		if "HTTP/1.1 302" in self.header: # check redirecting
+			self.done = self.redirect() 
+		self.GetETAG() # Get Etag and date modified from the file 
+		self.done = self.check_ETAG() # check is that download yet
+		if self.done: # If file already download, stop process
+			return None
+		if self.content_length == '': # Check for the content length
+			self.ResumeWithoutContentLength()
+			self.CloseSocket()
+		else:
+			self.ResumeWithContentLength()
+			self.CloseSocket()
+		os.remove(self.filename+"Header"+'.txt') # Remove the header file when download is done
+	
+	def FullDownload(self):
+		self.connection(self.servName,self.objName) # Make the connection for full download
+		self.Get_Header(self.filename) # Get header and store header file
+		self.ContentLength() # get content length
+		if "HTTP/1.1 302" in self.header: # Check for redirecting
+			self.done = self.redirect()
+		if self.done: # Check that file is already download from redirect function
+			return None
+		if self.content_length == '': # Download without content length
+			self.DownloadWithoutContentLength(self.filename) 
+		else: # Downlaod with content length
+			self.DownloadWithContentLength(self.filename)
+		os.remove(self.filename+"Header"+'.txt') # Remove the header file when download is done
+		self.CloseSocket()
+
+	def connection(self,servName,objName): # Make the connection and send request to download
+		self.sock = sk.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.sock.connect((self.servName, 80))
+		self.request = self.mkDownloadRequest()
+		self.sock.send(self.request)
+
+	def connectionWithresume(self,servName,objName,start): # Make the connection and send request to download from byte to the end
+		self.sock = sk.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.sock.connect((self.servName, 80))
+		self.request2 = self.mkDownloadRequest(start)
+		self.sock.send(self.request2)
+
+
+	def Get_Header(self,filename): # Get header
+		self.header = '' # reset header every time that call function 
+		while "\r\n\r\n" not in self.header: # Download one byte each until \r\n\r\n in the file 
+			Data = self.sock.recv(1)
+			self.header += Data
+		if self.resumeonheader != 1: # Store the header if this download is not done
+			file = open(self.filename+"Header"+'.txt','wb')
+			file.write(self.header)
+
+	def ContentLength(self): # Get content length
+		self.content_length = ''
+		ContentLength_Counter = self.header.find("Content-Length")
+		num = ['0','1','2','3','4','5','6','7','8','9']
+		if ContentLength_Counter != -1:
+			for x in range(100): # Cut the content length from header
+				if self.header[ContentLength_Counter+x] in num:
+					self.content_length += self.header[ContentLength_Counter+x]
+				elif self.header[ContentLength_Counter+x] == "\n":
+					break
+
+	def DownloadWithoutContentLength(self,filename): # Download without content length
+		with open(filename,'wb') as file: # open the file for create file and write file
+			while True: # get the data until no data come in
+			    data = self.sock.recv(1024)
+			    file.write(data)
+			    print len(data)
+			    if len(data) == 0:
+			        self.sock.close()
+			        break
+
+	def DownloadWithContentLength(self,filename): # Download file that provide content length
+		dataSoFar = 0 # data that loaded
+		with open(filename,'wb') as file: # # open the file for create file and write file
+			while dataSoFar != int(self.content_length): # Download until it equal content length
+				data2 = self.sock.recv(1024)
+				dataSoFar += len(data2)
+				file.write(data2)
+				print dataSoFar, self.content_length
+
+
+	def ResumeWithoutContentLength(self): # Resume download file without content length
+		dataSoFar = 0 
+		with open(self.filename,'a+') as file: # open a file for append
+			while True: # get the data until no data come in
+			    data = self.sock.recv(1024)
+			    file.write(data)
+			    print len(data)
+			    if len(data) == 0:
+			        self.sock.close()
+			        break
+
+	def ResumeWithContentLength(self): # Resume download file with content length
+		dataSoFar = 0
+		with open(self.filename,'a+') as file: # open a file for append
+			while dataSoFar != int(self.content_length): # Download until equal to content length
+				data2 = self.sock.recv(1024)
+				dataSoFar += len(data2)
+				print dataSoFar
+				file.write(data2)
+
+	def GetETAG(self): # Get ETAG and date modifoed from header
+		if "ETag" in self.header:
+			ETag_index = self.header.find("ETag")
+			for a in range(100):
+				self.ETag += self.header[ETag_index + 6 + a]
+				if self.header[ETag_index+ 6 + a] == '\r':
+					break
+		if "Last-Modified" in self.header:
+			Last_Modified_index = self.header.find("Last-Modified")
+			for a in range(100):
+				self.Last_Modified += self.header[Last_Modified_index + 15 + a]
+				if self.header[Last_Modified_index + 15 + a] == '\r':
+					break
+
+
+	def check_ETAG(self): # Check ETag and date modified to do full download if it not same
+		file = open(self.filename+"Header"+'.txt','r')
+		Old_Header = file.read()
+		Old_ETag = ''
+		Old_Last_Modified = ''
+		if "ETag" in Old_Header:
+			ETag_index = Old_Header.find("ETag")
+			for a in range(100):
+				Old_ETag += Old_Header[ETag_index + 6 + a]
+				if Old_Header[ETag_index+ 6 + a] == '\r':
+					break
+			if Old_ETag != self.ETag:
+				self.CloseSocket()
+				self.FullDownload()
+				return True
+
+		elif "Last-Modified" in Old_Header:
+			ETag_index = Old_Header.find("Last-Modified")
+			for a in range(100):
+				Old_Last_Modified += Old_Header[ETag_index + 15 + a]
+				if Old_Header[ETag_index+ 15 + a] == '\r':
+					break
+			if Old_Last_Modified != self.Last_Modified:
+				self.CloseSocket()
+				self.FullDownload()
+				return True
+		if "ETAG" and "Last-Modified" not in self.header or "ETAG" and "Last-Modified" not in Old_Header:
+			self.CloseSocket()
+			self.FullDownload()
+			return True
+
+	def cutURL(self): # slice the URL
+		if self.url[:7] == 'http://': 
+			self.url = self.url[7:]
+		cut = self.url.find('/')
+		if cut == -1:
+			self.servName = self.url
+			self.objName = '/'
+		else:
+			self.servName = self.url[:cut]
+			self.objName = self.url[cut:]	
+
+	def redirect(self): # Check for redirection
+		index = self.header.find("location")
+		location = '/'
+		for i in range(len(self.header)): # cut the header to get location of redirect link
+			if self.header[index+ 10 + i] == '\r':
+				break
+			location += self.header[index + 10 + i]
+		self.objName = location
+		self.CloseSocket()
+		if os.path.isfile(self.filename):
+			self.FullDownload()
+			return True
+		else:
+			self.FullDownload()
+			return True
+
+	def cut_file(self):
+		pass 
+		
+
+	def CloseSocket(self): # close the socket
+		self.sock.close()
+		print "Done"
+
+if __name__ == '__main__':
+	#-o/-c
+	argv = sys.argv[1:]
+	print argv
+	url = argv[-1]
+	try:
+		opts,args = getopt.getopt(argv,"o:c",["ofile="])
+	
+	except:
+		sys.exit(8)
+
+	for opt,arg in opts:
+		if opt == '-o':
+			filename = arg
+		elif opt == '-c':
+			print "do sth"
+	Download(url,filename)
