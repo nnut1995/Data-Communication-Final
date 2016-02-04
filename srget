@@ -95,7 +95,6 @@ class Download(object):
 		if self.resumeonheader != 1: # Store the header if this download is not done
 			file = open(self.filename+"Header"+'.txt','wb')
 			file.write(self.header)
-		print self.header
 	def ContentLength(self): # Get content length
 		self.content_length = ''
 		ContentLength_Counter = self.header.find("Content-Length")
@@ -106,7 +105,6 @@ class Download(object):
 					self.content_length += self.header[ContentLength_Counter+x]
 				elif self.header[ContentLength_Counter+x] == "\n":
 					break
-		print self.content_length
 
 	def DownloadWithoutContentLength(self,filename): # Download without content length
 		dataSoFar = 0
@@ -115,7 +113,6 @@ class Download(object):
 			    data = self.sock.recv(1024)
 			    file.write(data)
 			    dataSoFar += len(data)
-			    print dataSoFar
 			    if len(data) == 0:
 			        self.sock.close()
 			        break
@@ -127,7 +124,6 @@ class Download(object):
 				data2 = self.sock.recv(1024)
 				dataSoFar += len(data2)
 				file.write(data2)
-				print dataSoFar, self.content_length
 
 	def ResumeWithContentLength(self): # Resume download file with content length
 		dataSoFar = 0
@@ -135,7 +131,6 @@ class Download(object):
 			while dataSoFar != int(self.content_length): # Download until equal to content length
 				data2 = self.sock.recv(1024)
 				dataSoFar += len(data2)
-				print dataSoFar, self.content_length
 				file.write(data2)
 
 	def GetETAG(self): # Get ETAG and date modifoed from header
@@ -213,7 +208,7 @@ class Download(object):
 
 	def CloseSocket(self): # close the socket
 		self.sock.close()
-		print "Done"
+
 
 if __name__ == '__main__':
 	#-o/-c
